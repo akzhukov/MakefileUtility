@@ -8,7 +8,7 @@ internal class Target
 {
     public string Name { get; set; }
     public List<IAction> Actions { get; set; } = new List<IAction>();
-    public HashSet<Target> Dependencies { get; set; } = new HashSet<Target>();
+    public List<Target> Dependencies { get; set; } = new List<Target>();
     public HashSet<string> DependencyNames { get; set; } = new HashSet<string>();
 
     public override bool Equals(object obj)
