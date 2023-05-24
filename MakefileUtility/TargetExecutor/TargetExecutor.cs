@@ -21,66 +21,98 @@ public class TargetExecutor : ITargetExecutor
         if (!_targets.TryGetValue(targetName, out var target))
             throw new InvalidDataException($"Target with name {targetName} does not exist");
 
-        ExecuteTarget(target);
+        ExecuteTargetWithDependencies(target);
     }
 
-    private void ExecuteTarget(Target executedTarget)
+    private void ExecuteTargetWithDependencies(Target executingTarget)
+    {
+        var orderedTargets = GetOrderedTargetDependecies(executingTarget);
+
+        foreach (var target in orderedTargets)
+        {
+            foreach (var action in target.Actions)
+            {
+                action.Execute();
+            }
+        }
+    }
+
+    private record IndexedTarget(Target Target, int Index);
+    private IEnumerable<Target> GetOrderedTargetDependecies(Target executingTarget)
     {
         List<Target> result = new();
-        Stack<(Target, int)> stack = new();
-        (Target Target, int Index) lastVisited = (executedTarget, 0);
-        Target fakeTarget = new() { Name = "FakeTarget" };
-        int index = 0;
+        Stack<IndexedTarget> indexedTargetStack = new();
 
-        while (stack.Count > 0 || executedTarget is not null)
+        IndexedTarget lastVisitedTarget = new(executingTarget, 0);
+        Target emptyTarget = new() { Name = string.Empty};
+        int dependencyIndex = 0;
+
+        while (indexedTargetStack.Count > 0 || executingTarget is not null)
         {
-            if (executedTarget is not null)
+            if (executingTarget is not null)
             {
-                if (!_targetStates.TryGetValue(executedTarget, out var state))
-                    _targetStates.Add(executedTarget, TargetState.PrepareToExecution);
-
-                if (state == TargetState.PrepareToExecution)
-                    throw new InvalidDataException($"Unable to execute target. Dependencies graph contains cycle.");
-
-                if (state == TargetState.Executed)
-                    executedTarget = fakeTarget;
-
-                stack.Push((executedTarget, index));
-                index = 0;
-                executedTarget = executedTarget.Dependencies.Any() ? executedTarget.Dependencies[0] : null;
+                CheckExecutingTargetState();
+                MoveToDeeperLevel(new IndexedTarget(executingTarget, dependencyIndex));
             }
             else
             {
-                (Target Target, int Index) peeked = stack.Peek();
-                Target target = peeked.Target;
-                index = peeked.Index;
+                IndexedTarget peekedTarget = indexedTargetStack.Peek();
+                dependencyIndex = peekedTarget.Index;
 
-                if (target.Dependencies.Count > 1 && lastVisited.Index != target.Dependencies.Count - 1)
+                if (!MoveToNextDependency(peekedTarget))
                 {
-                    index = lastVisited.Index + 1;
-                    executedTarget = target.Dependencies[index];
-                }
-                else
-                {
-                    result.Add(target);
-                    lastVisited = (target, index);
-                    stack.Pop();
-                    _targetStates[target] = TargetState.Executed;
+                    ExecuteTarget(peekedTarget);
+                    lastVisitedTarget = peekedTarget;
                 }
             }
         }
 
-        foreach (var target in result)
-        {
-            ExecuteTargetActions(target);
-        }
-    }
+        return result;
 
-    private void ExecuteTargetActions(Target target)
-    {
-        foreach (var action in target.Actions)
+        bool MoveToNextDependency(IndexedTarget target)
         {
-            action.Execute();
+            if (target.Target.Dependencies.Count > 1
+                && lastVisitedTarget.Index != target.Target.Dependencies.Count - 1)
+            {
+                dependencyIndex = lastVisitedTarget.Index + 1;
+                executingTarget = target.Target.Dependencies[dependencyIndex];
+                return true;
+            }
+
+            return false;
+        }
+
+        void MoveToDeeperLevel(IndexedTarget target)
+        {
+            indexedTargetStack.Push(target);
+            dependencyIndex = 0;
+            executingTarget = target.Target.Dependencies.Any() ? target.Target.Dependencies[0] : null;
+        }
+
+        void ExecuteTarget(IndexedTarget target)
+        {
+            result.Add(target.Target);
+            indexedTargetStack.Pop();
+            _targetStates[target.Target] = TargetState.Executed;
+        }
+
+        void CheckExecutingTargetState()
+        {
+            if (!_targetStates.TryGetValue(executingTarget, out var state))
+            {
+                _targetStates.Add(executingTarget, TargetState.PrepareToExecution);
+                return;
+            }
+
+            //данная задача уже есть в цепочке зависимостей,
+            //значит ориентированный граф содержит цикл и выполнение задачи невозможно
+            if (state == TargetState.PrepareToExecution)
+                throw new InvalidDataException($"Unable to execute target. Dependencies graph contains cycle.");
+
+            //если задача уже выполнялась, то повторно ее и ее зависимости выполнять не надо
+            //поэтому подменяем ее на пустую задачу без зависимостей
+            if (state == TargetState.Executed)
+                executingTarget = emptyTarget;
         }
     }
 }
